@@ -1,0 +1,10 @@
+[package]
+name = "rust-gc"
+version = "0.1.0"
+authors = ["Joshua Yanovski <pythonesque@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+# typed-arena = "1.4.1"
+# copy_arena = "0.1.1"
+light_arena = "1.0.1"
