@@ -6,20 +6,20 @@
 #![feature(core_intrinsics)]
 #![feature(dispatch_from_dyn)]
 #![feature(dropck_eyepatch)]
-#![feature(placement_in_syntax)]
+// #![feature(placement_in_syntax)]
 #![feature(receiver_trait)]
 #![feature(rustc_private)]
 #![feature(specialization)]
 #![feature(unsize)]
 
-// extern crate arena;
+extern crate arena;
 extern crate core;
 
 mod ghost_cell;
 
-// use arena::TypedArena;
+use arena::TypedArena;
 // use copy_arena::{Arena, Allocator};
-use light_arena::{self, MemoryArena, Allocator};
+// use light_arena::{self, MemoryArena, Allocator};
 
 
 use core::any::Any;
@@ -643,10 +643,6 @@ pub unsafe trait GcArcLayout {
     type AsArcFwd : GcArcFwdLayout<FromArcFwd=Self::AsArc>;
 }
 
-unsafe impl<'a, T> GcArcFwdLayout for GcArcFwd<'a, T> {
-    type FromArcFwd = GcArc<T>;
-}
-
 /// We also have an implementation in the other direction, providing a zero-cost coercion from
 /// Self::AsArcFwd to Self::AsArc.  This should be done by mechanically transforming every
 /// Gc<'a, T> pointer in the type to GcArcFwd<'a, T::AsArcFwd>.  This is only sound to do when
@@ -656,13 +652,13 @@ pub unsafe trait GcArcFwdLayout {
     type FromArcFwd;
 }
 
-pub struct GcFwd<'a> {
-    _marker: InvariantLifetime<'a>,
+pub struct GcFwd<'gc> {
+    _marker: InvariantLifetime<'gc>,
 }
 
 #[derive(Clone,Copy)]
-pub struct GcDead<'a> {
-    _marker: InvariantLifetime<'a>,
+pub struct GcDead<'gc> {
+    _marker: InvariantLifetime<'gc>,
 }
 
 pub trait Hkt<#[may_dangle]'a> {
@@ -670,9 +666,9 @@ pub trait Hkt<#[may_dangle]'a> {
 }
 
 impl<'a> GcFwd<'a> {
-    pub fn new<T, /*I, */F, R>(/*init: I, */f: F) -> R
+    pub fn new</*T, *//*I, */F, R>(/*init: I, */f: F) -> R
         where
-            T: for <'new_id> Hkt<'new_id>,
+            // T: for <'new_id> Hkt<'new_id>,
             // This is too restrictive, but let's go with it for now.
             /* for <'new_id> <T as Hkt<'new_id>>::HktOut: Copy,
             for <'new_id> <T as Hkt<'new_id>>::HktOut: GcArcLayout, */
@@ -681,23 +677,23 @@ impl<'a> GcFwd<'a> {
             // I: for <'new_id> FnOnce(&GcFwd<'new_id>) -> TypedArena<GcRefInner<'new_id, Expr<'new_id>>>,
             // I: for <'new_id> FnOnce(InvariantLifetime<'new_id>) -> <T as Hkt<'new_id>>::HktOut,
             // F: for <'new_id> FnOnce(&'new_id /*mut */<T as Hkt<'new_id>>::HktOut, GcFwd<'new_id>) -> R,
-            F: for <'new_id> FnOnce(&'new_id /*mut */Allocator/*<GcRefInner<'new_id, <T as Hkt<'new_id>>::HktOut>>*/, GcFwd<'new_id>) -> R,
+            F: for <'new_id> FnOnce(/*&'new_id /*mut */Allocator/*<GcRefInner<'new_id, <T as Hkt<'new_id>>::HktOut>>*/, */GcFwd<'new_id>) -> R,
             // F: for <'new_id> FnOnce(&'new_id mut /*<T as Hkt<'new_id>>::HktOut*/TypedArena</*<T as Hkt<'new_id>>::HktOut*/GcRefInner<'new_id, Expr<'new_id>>>, GcFwd<'new_id>) -> R,
     {
         // We choose the lifetime; it is definitely unique for each new instance of Set.
         {
-            let (mut data, fwd) : (/*TypedArena<GcRefInner<<T as Hkt<'_>>::HktOut>>*/MemoryArena, GcFwd<'_>);
+            let (/*mut data, */fwd) : (/*TypedArena<GcRefInner<<T as Hkt<'_>>::HktOut>>*//*MemoryArena, */GcFwd<'_>);
             // let (mut data, fwd) : (TypedArena<GcRefInner<<T as Hkt<'_>>::HktOut>>, GcFwd<'_>);
             // let (mut data, fwd) : (T::HktOut, GcFwd);
             // let (mut data, fwd) : (TypedArena</*T::HktOut*/GcRefInner<Expr>>, GcFwd);
             fwd = GcFwd {
                 _marker: InvariantLifetime::new(),
             };
-            data = /*init(InvariantLifetime::new())*//*TypedArena*/MemoryArena::new(1024 * 1024);
+            // data = /*init(InvariantLifetime::new())*//*TypedArena*/MemoryArena::new(1024 * 1024);
             // data = init(&fwd);
             // Return the result of running f.  Note that the Set itself can't be returned, because R
             // can't mention the lifetime 'id, so the Set really does only exist within its scope.
-            let r = f(/*&mut data*/&data.allocator(), fwd);
+            let r = f(/*&mut data*//*&data.allocator(), */fwd);
             r
         }
     }
@@ -725,17 +721,21 @@ impl<'a> GcFwd<'a> {
 
 /// Like a GcArc, but without Drop.
 #[repr(C)]
-pub struct GcArcFwd<'a, T> {
+pub struct GcArcFwd<'gc, T> {
     /// Conceptually speaking, this pointer is "owning", just like with Arc; the main difference
     /// is that we never drop its contents until after GcFwd<'a> is done (at which point we can
     /// move this to another type).  Another way to say this is that the pointer's lifetime is
     /// *at least* GcFwd<'a>, but there's no reasonable way to write this.
     ptr: NonNull<GcArcInner<T>>,
     phantom: PhantomData<T>,
-    _marker: InvariantLifetime<'a>,
+    _marker: InvariantLifetime<'gc>,
 }
 
-impl<'a, T> GcArcFwd<'a, T> {
+unsafe impl<'gc, T> GcArcFwdLayout for GcArcFwd<'gc, T> {
+    type FromArcFwd = GcArc<T>;
+}
+
+impl<'gc, T> GcArcFwd<'gc, T> {
     /// Creating a new GcArcFwd requires only a T.  It is exactly like a GcArc<T>, but won't allow
     /// drops (or reading the data, for the time being at least) until GcDead<'a> is available.
     /// Note that at the moment it doesn't require GcFwd<'a> (evidence that the forwarding pointer
@@ -743,7 +743,7 @@ impl<'a, T> GcArcFwd<'a, T> {
     /// implicitly guarantees that its contents will be alive for as long as the forwarding pointer
     /// is.
     #[inline]
-    pub fn new(data: T) -> GcArcFwd<'a, T> {
+    pub fn new(data: T) -> GcArcFwd<'gc, T> {
         // Start the weak pointer count as 1 which is the weak pointer that's
         // held by all the strong pointers (kinda), see std/rc.rs for more info
         let x: Box<_> = box GcArcInner {
@@ -771,15 +771,15 @@ impl<'a, T> GcArcFwd<'a, T> {
     #[inline]
     /// Transform into a regular GcArc, but only when forwarding pointers cannot be followed
     /// anymore.
-    pub fn into_gc_arc(self, _: GcDead<'a>) -> GcArc<T> {
+    pub fn into_gc_arc(self, _: GcDead<'gc>) -> GcArc<T::FromArcFwd> where T: GcArcFwdLayout {
         // This unsafety is ok because while this arc is alive we're guaranteed
         // that the inner pointer is valid. Furthermore, we know that the
         // `GcArcInner` structure itself is `Sync` because the inner data is
         // `Sync` as well, so we're ok loaning out an immutable pointer to these
         // contents.
         GcArc {
-            ptr: self.ptr,
-            phantom: self.phantom,
+            ptr: self.ptr.cast(),
+            phantom: PhantomData,
         }
     }
 }
@@ -800,7 +800,7 @@ impl<'a, T> From<&'a GcArc<T::AsArc>> for GcArcFwd<'a, T::AsArcFwd> where T: GcA
 } */
 
 /// Can always turn a GcArc into a GcArcFwd, if needed.
-impl<'a, T> From<GcArc<T::FromArcFwd>> for GcArcFwd<'a, T> where T: GcArcFwdLayout {
+impl<'gc, T> From<GcArc<T::FromArcFwd>> for GcArcFwd<'gc, T> where T: GcArcFwdLayout {
     #[inline]
     fn from(arc: GcArc<T::FromArcFwd>) -> Self {
         GcArcFwd {
@@ -812,9 +812,9 @@ impl<'a, T> From<GcArc<T::FromArcFwd>> for GcArcFwd<'a, T> where T: GcArcFwdLayo
     }
 }
 
-impl<'a, T/*: ?Sized*/> Clone for GcArcFwd<'a, T> {
+impl<'gc, T/*: ?Sized*/> Clone for GcArcFwd<'gc, T> {
     #[inline]
-    fn clone(&self) -> GcArcFwd<'a, T> {
+    fn clone(&self) -> GcArcFwd<'gc, T> {
         // Using a relaxed ordering is alright here, as knowledge of the
         // original reference prevents other threads from erroneously deleting
         // the object.
@@ -852,7 +852,7 @@ impl<'a, T/*: ?Sized*/> Clone for GcArcFwd<'a, T> {
 }
 
 #[repr(C)]
-pub struct GcRefInner<'a, T/*: ?Sized*/> where T: GcArcLayout {
+pub struct GcRefInner<'gc, T/*: ?Sized*/> where T: GcArcLayout {
     /// Always 0
     gc_ref_tag: atomic::AtomicUsize,
     /// TODO: See how this plays with DST stuff... we want to make sure the data are aligned for
@@ -867,7 +867,7 @@ pub struct GcRefInner<'a, T/*: ?Sized*/> where T: GcArcLayout {
     /// is single-threaded).
     forward: Cell<Option</*GcArcFwd<'a, T::AsArcFwd>*/NonNull<GcArcInner<T::AsArcFwd>>>>,
     data: T,
-    _marker: InvariantLifetime<'a>
+    _marker: InvariantLifetime<'gc>
 }
 
 impl<'a, T> From<&'a GcArcInner<T>> for GcArc<T> {
@@ -920,7 +920,7 @@ impl<'a, T> From<&'a GcArcInner<T>> for GcArc<T> {
     }
 } */
 
-impl<'a, T> GcRefInner<'a, T> where T: GcArcLayout {
+impl<'gc, T> GcRefInner<'gc, T> where T: GcArcLayout {
     pub fn new(data: T) -> Self {
         GcRefInner {
             gc_ref_tag: atomic::AtomicUsize::new(0),
@@ -932,7 +932,7 @@ impl<'a, T> GcRefInner<'a, T> where T: GcArcLayout {
 }
 
 #[repr(C)]
-pub union Gc<'a, T> where T: GcArcLayout {
+pub union Gc<'gc, 'a, T> where T: GcArcLayout {
     /// FIXME: old should probably be limited by the scope of GcFwd<'a> as well.
     ///  That is, we shouldn't care about being able to access things behind
     /// an old reference after we get a GcDead.  But since currently dereference
@@ -945,10 +945,10 @@ pub union Gc<'a, T> where T: GcArcLayout {
     /// actually all valid until the arena is freed.  However, it does sort of imply that
     /// the data behind the pointer are always valid, which means that the forwarding
     /// pointer needs to be extra careful to never be dereferenced unless GcFwd is alive.
-    new: &'a GcRefInner<'a, T>,
+    new: &'a GcRefInner<'gc, T>,
 }
 
-impl<'a, T> Clone for Gc<'a, T> where T: GcArcLayout {
+impl<'gc, 'a, T> Clone for Gc<'gc, 'a, T> where T: GcArcLayout {
     #[inline]
     fn clone(&self) -> Self {
         // Always legal to copy either pointer
@@ -958,7 +958,7 @@ impl<'a, T> Clone for Gc<'a, T> where T: GcArcLayout {
     }
 }
 
-impl<'a, T> Copy for Gc<'a, T> where T: GcArcLayout {
+impl<'gc, 'a, T> Copy for Gc<'gc, 'a, T> where T: GcArcLayout {
 }
 
 
@@ -984,7 +984,7 @@ impl<'a, T> Hkt<'a> for GcRefInnerHkt<T>
 } */
 
 
-impl<'a, T/*: ?Sized*/> Deref for Gc<'a, T> where T: GcArcLayout {
+impl<'gc, 'a, T/*: ?Sized*/> Deref for Gc<'gc, 'a, T> where T: GcArcLayout {
     type Target = T;
 
     #[inline]
@@ -997,9 +997,9 @@ impl<'a, T/*: ?Sized*/> Deref for Gc<'a, T> where T: GcArcLayout {
 }
 
 /// Note: safe because can go from T to T::AsArc!
-impl<'a, T> From<&'a GcRefInner<'a, T>> for Gc<'a, T> where T: GcArcLayout {
+impl<'gc, 'a, T> From<&'a GcRefInner<'gc, T>> for Gc<'gc, 'a, T> where T: GcArcLayout {
     #[inline]
-    fn from(new: &'a GcRefInner<'a, T>) -> Self {
+    fn from(new: &'a GcRefInner<'gc, T>) -> Self {
         Gc { new }
     }
 }
@@ -1020,10 +1020,10 @@ impl<'a, T> From<&'a GcArc<T::AsArc>> for Gc<'a, T> {
     }
 } */
 
-impl<'a, T> Gc<'a, T> where T: GcArcLayout {
+impl<'gc, 'a, T> Gc<'gc, 'a, T> where T: GcArcLayout {
     /// Note: this should only be run during collection, but with the current design it doesn't matter.
     #[inline]
-    pub fn try_as_arc<'b>(self, fwd: &'b GcFwd<'a>) -> Result</*&'a GcArcInner<T::AsArcFwd>*/GcArcFwd<'a, T::AsArcFwd>, &'a GcRefInner<'a, T>> {
+    pub fn try_as_arc<'b>(self, fwd: &'b GcFwd<'gc>) -> Result</*&'a GcArcInner<T::AsArcFwd>*/GcArcFwd<'gc, T::AsArcFwd>, &'a GcRefInner<'gc, T>> {
         unsafe {
             let old_strong = self.old.strong.load(Relaxed);
             if old_strong > 0 {
@@ -1052,29 +1052,29 @@ impl<'a, T> Gc<'a, T> where T: GcArcLayout {
     }
 }
 
-impl<'a, T> GcRefInner<'a, T> where T: GcArcLayout {
+impl<'gc, T> GcRefInner<'gc, T> where T: GcArcLayout {
     /// Note: we probably should only be allowed to do this when we already know the forwarding
     /// pointer is zero, but there's no safety reason to require this at the moment (that I can
-    /// think of, anyway).  Note that we do *not* require GcFwd<'a> to be alive in order to set the
+    /// think of, anyway).  Note that we do *not* require GcFwd<'gc> to be alive in order to set the
     /// forwarding pointer, only in order to deference it.
     #[inline]
-    pub fn set_forwarding<'b, 'c>(&'b self, forwarding: &'c GcArcFwd<'a, T::AsArcFwd>) {
-        // Whether GcFwd<'a> is alive or not when we set the poiner, we will only allow *de*referencing it
-        // if GcFwd<'a> is alive, which works fine as long as we know that at least one
-        // GcArcFwd<'a, T::AsArcFwd> exists with this pointer value (and is borrowed for a lifetime
-        // at most as long as 'a).  This is because the only way to drop something pointed to by a
-        // GcArcFwd<'a, T::AsArcFwd> is to first transform it into a GcArc<T>, which requires Dead<'a>
+    pub fn set_forwarding<'b, 'c>(&'b self, forwarding: &'c GcArcFwd<'gc, T::AsArcFwd>) {
+        // Whether GcFwd<'gc> is alive or not when we set the poiner, we will only allow *de*referencing it
+        // if GcFwd<'gc> is alive, which works fine as long as we know that at least one
+        // GcArcFwd<'gc, T::AsArcFwd> exists with this pointer value (and is borrowed for a lifetime
+        // at most as long as 'gc).  This is because the only way to drop something pointed to by a
+        // GcArcFwd<'gc, T::AsArcFwd> is to first transform it into a GcArc<T>, which requires Dead<'gc>
         // and taking the GcArcFwd by self.  This does mean it's not safe to transform references to
-        // &'c GcArc<T>, where 'c is shorter than 'a, into GcArcFwd<'a, T::AsArcFwd>, since
+        // &'c GcArc<T>, where 'c is shorter than 'gc, into GcArcFwd<'gc, T::AsArcFwd>, since
         // otherwise you can cause problems--but now that GcArcFwd is not easy to move it is not
         // too likely that we would make the mistake of exposing an API like that.
         self.forward.set(Some(forwarding.inner().into()));
     }
 }
 
-impl<'a, T> Gc<'a, T> where T: GcArcLayout {
+impl<'gc, 'a, T> Gc<'gc, 'a, T> where T: GcArcLayout {
     #[inline]
-    fn from(new: &'a GcRefInner<'a, T>) -> Self {
+    fn from(new: &'a GcRefInner<'gc, T>) -> Self {
         Gc { new }
     }
 }
@@ -1101,18 +1101,18 @@ pub struct TypedArenaHkt<T>(T);
     /// Just trying to keep representations the same.
     #[repr(C)]
     #[derive(Clone,Copy)]
-    enum Expr<'a> {
+    enum Expr<'gc, 'a> {
         Rel(u64),
-        Abs(Gc<'a, Expr<'a>>),
-        App(App<Gc<'a, Expr<'a>>>),
+        Abs(Gc<'gc, 'a, Expr<'gc, 'a>>),
+        App(App<Gc<'gc, 'a, Expr<'gc, 'a>>>),
     }
 
     /// Just trying to keep representations the same.
     #[repr(C)]
-    enum ExprRef<'a> {
+    enum ExprRef<'gc, 'a> {
         Rel(u64),
-        Abs(&'a GcRefInner<'a, ExprRef<'a>>),
-        App(App<&'a GcRefInner<'a, ExprRef<'a>>>),
+        Abs(&'a GcRefInner<'gc, ExprRef<'gc, 'a>>),
+        App(App<&'a GcRefInner<'gc, ExprRef<'gc, 'a>>>),
     }
     
     /// Just trying to keep representations the same.
@@ -1125,25 +1125,25 @@ pub struct TypedArenaHkt<T>(T);
 
     /// Just trying to keep representations the same.
     #[repr(C)]
-    enum ExprArcFwd<'a> {
+    enum ExprArcFwd<'gc> {
         Rel(u64),
-        Abs(GcArcFwd<'a, ExprArcFwd<'a>>),
-        App(App<GcArcFwd<'a, ExprArcFwd<'a>>>),
+        Abs(GcArcFwd<'gc, ExprArcFwd<'gc>>),
+        App(App<GcArcFwd<'gc, ExprArcFwd<'gc>>>),
     }
 
     /// Should have the exact same layout.
-    unsafe impl<'a> GcArcLayout for Expr<'a> {
+    unsafe impl<'gc, 'a> GcArcLayout for Expr<'gc, 'a> {
         type AsArc = ExprArc;
-        type AsArcFwd = ExprArcFwd<'a>;
+        type AsArcFwd = ExprArcFwd<'gc>;
     }
 
     /// Should have the exact same layout.
-    unsafe impl<'a> GcArcLayout for ExprRef<'a> {
+    unsafe impl<'gc, 'a> GcArcLayout for ExprRef<'gc, 'a> {
         type AsArc = ExprArc;
-        type AsArcFwd = ExprArcFwd<'a>;
+        type AsArcFwd = ExprArcFwd<'gc>;
     }
 
-    unsafe impl<'a> GcArcFwdLayout for ExprArcFwd<'a> {
+    unsafe impl<'gc> GcArcFwdLayout for ExprArcFwd<'gc> {
         type FromArcFwd = ExprArc;
     }
 
@@ -1151,11 +1151,11 @@ pub fn gc_example() {
     type Idx = usize;
 
 
-    struct ExprHkt;
+    /* struct ExprHkt;
 
     impl<'a> Hkt<'a> for ExprHkt {
         type HktOut = Expr<'a>;
-    }
+    } */
 
     /* struct ExprHkt2;
 
@@ -1212,13 +1212,42 @@ pub fn gc_example() {
     {
         GcFwd::new::</*TypedArenaHkt<GcRefInnerHkt<ExprHkt>>*/ExprHkt2, _, _, ()>(/*|_: &_| TypedArena::default()*/(initialize as (for<'a> fn(&GcFwd<'a>) -> <ExprHkt2 as Hkt<'a>>::HktOut)), /*f*/(run as (for<'a> fn(&'a mut <ExprHkt2 as Hkt<'a>>::HktOut, GcFwd<'a>))))
     } */ */
-    GcFwd::new::<ExprHkt, _, _>(/*|_| (TypedArena::default()), */move |my_arena, fwd| {
+    let root = GcFwd::new/*::<ExprHkt, _, _>*/(/*|_| (TypedArena::default()), */move |/*my_arena, */fwd| {
+        let my_arena: TypedArena::<GcRefInner<Expr>> = TypedArena::default();
+
+        // Mutator part.
         let mut new_stack = Vec::<ExprRef>::new();
         let var = (&*my_arena.alloc(GcRefInner::new(Expr::Rel(0)))).into();
         let id = my_arena.alloc(GcRefInner::new(Expr::Abs(var)));
-        my_arena.alloc(GcRefInner::new(Expr::Rel(1)));
+        let r2 = my_arena.alloc(GcRefInner::new(Expr::Rel(1)));
 
+        // Do some tracing.
+        let root = match Gc::from(id).try_as_arc(&fwd) {
+            Ok(old_id) => old_id,
+            Err(new_id) => {
+                if let Expr::Abs(r) = *Gc::from(new_id) {
+                    let var = match r.try_as_arc(&fwd) {
+                        Ok(var_id) => var_id,
+                        Err(new_id) => {
+                            let new_var_id = if let Expr::Rel(i) = *Gc::from(new_id) {
+                                GcArcFwd::new(ExprArcFwd::Rel(i))
+                            } else {
+                                panic!()
+                            };
+                            new_id.set_forwarding(&new_var_id);
+                            new_var_id
+                        }
+                    };
+                    let new_abs = GcArcFwd::new(ExprArcFwd::Abs(var));
+                    new_id.set_forwarding(&new_abs);
+                    new_abs
+                } else { panic!(); }
+            }
+        };
+        let end = fwd.end();
+        root.into_gc_arc(end)
     });
+    println!("Passed root out of GC context.");
     // GcFwd::new::</*TypedArenaHkt<GcRefInnerHkt<*/ExprHkt/*>>*/, _, _, _>(/*|_: &_| TypedArena::default()*/initialize, nt);
     // constrain2(nt);
     /*GcFwd::new::<TypedArenaHkt<GcRefInnerHkt<ExprHkt>>, _, _, _>(initialize, /*move |my_arena : &'r mut <TypedArenaHkt<GcRefInnerHkt<ExprHkt>> as Hkt<'r>>::HktOut, fwd|*/
