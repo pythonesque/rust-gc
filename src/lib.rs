@@ -1510,7 +1510,7 @@ pub fn gc_example() {
             }
         } */
 
-        println!("{:?}", expr_to_string(/*&fwd, */&v));
+        println!("{}", expr_to_string(/*&fwd, */&v));
 
         // Do some tracing.
         /* fn trace<'a, 'gc>(fwd: &GcFwd<'gc>, expr: Gc<'gc, 'a, Expr<'gc, 'a>>) -> GcArcFwd<'gc, ExprArcFwd<'gc>> {
@@ -1589,7 +1589,7 @@ pub fn gc_example() {
         // let r2 = ExprVar::Rel(1);
         let v = /*Gc::from(&*my_arena.alloc(GcRefInner::new(Expr(*/ExprVar::App(App(root, root))/*))))*/;
 
-        println!("{:?}", expr_to_string(/*&fwd, */&v));
+        println!("{}", expr_to_string(/*&fwd, */&v));
 
         let root = trace_root(&fwd, /*&*/Expr(v/*r2*/));
         let end = fwd.end();
@@ -1698,7 +1698,7 @@ pub fn gc_example() {
 
        the forwarding pointer.
        we should freeze the stack (which will prevent roots from being dropped). */
-    println!("Passed root out of GC context: {:?}", /*expr_arc_to_string*/expr_to_string(&root2));
+    println!("Passed root out of GC context: {}", /*expr_arc_to_string*/expr_to_string(&root2));
 }
 
 #[cfg(test)]
