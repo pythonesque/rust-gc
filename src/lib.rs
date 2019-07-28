@@ -14,11 +14,11 @@
 #![feature(specialization)]
 #![feature(unsize)]
 
-// extern crate arena;
+extern crate arena;
 // extern crate alloc;
 extern crate core;
 
-mod arena;
+// mod arena;
 mod ghost_cell;
 
 use arena::TypedArena;
