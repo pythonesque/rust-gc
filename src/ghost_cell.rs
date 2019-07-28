@@ -152,7 +152,7 @@ impl<'id, T> Cell<'id, T> {
     /// appear to be ruled out.  For example, this code will not compile:
     ///
     /// ```compile_fail
-    /// use util::ghost_cell::{Set, Cell};
+    /// use ghost_cell::{Set, Cell};
     ///
     /// struct Foo<'a, 'id>(&'a Set<'id>,
     ///                         Cell<'id,
