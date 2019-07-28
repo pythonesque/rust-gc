@@ -1433,8 +1433,8 @@ pub fn gc_example() {
         }*/
         expr.match_shr(
             |idx| idx.to_string(),
-            |body| format!("(λ. {:?})", expr_to_string(&**body)),
-            |App(fun, arg)| format!("({:?} {:?})", expr_to_string(&*fun), expr_to_string(&**arg))
+            |body| format!("(λ. {})", expr_to_string(&**body)),
+            |App(fun, arg)| format!("({} {})", expr_to_string(&*fun), expr_to_string(&**arg))
         )
     }
 
@@ -1565,7 +1565,7 @@ pub fn gc_example() {
         /* unsafe { mem::transmute(root) } */
         // ExprArc::Rel(0)
     });
-    println!("Passed root out of GC context: {:?}", /*expr_arc_to_string*/expr_to_string(&root));
+    println!("Passed root out of GC context: {}", /*expr_arc_to_string*/expr_to_string(&root));
 
     let root2 = GcFwd::new(move |fwd| {
         // let root = GcArc::new(root);
