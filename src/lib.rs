@@ -762,7 +762,7 @@ impl<'gc, T> GcArcFwd<'gc, T> {
     /// implicitly guarantees that its contents will be alive for as long as the forwarding pointer
     /// is.
     #[inline]
-    pub fn new(data: T) -> GcArcFwd<'gc, T> where T : GcArcFwdLayout {
+    pub fn new(data: T) -> GcArcFwd<'gc, T> /*where T : GcArcFwdLayout*/ {
         // Start the weak pointer count as 1 which is the weak pointer that's
         // held by all the strong pointers (kinda), see std/rc.rs for more info
         /* let x = unsafe {
@@ -821,6 +821,7 @@ impl<'gc, T> GcArcFwd<'gc, T> {
         /* unsafe {
             mem::transmute(ManuallyDrop::into_inner(self.arc))
         } */
+        // ManuallyDrop::into_inner(self.arc)
         GcArc {
             ptr: self.arc.ptr.cast(),
             phantom: PhantomData,
@@ -1105,10 +1106,10 @@ impl<'gc, 'a, T> Gc<'gc, 'a, T> where T: GcArcLayout {
             } else {
                 // This is a GcRef.
                 let new = self.new;
-                if let Some(forward) = new.forward.get() {
+                if let Some(ref forward) = new.forward.get() {
                     // Since fwd is still going on, it's safe to dereference the forwarding pointer.
-                    let fwd_ref : &GcArcInner<T::AsArcFwd> = forward.as_ref();
-                    let forward: &GcArcFwd<T::AsArcFwd> = mem::transmute(&fwd_ref);
+                    // let fwd_ref : &GcArcInner<T::AsArc/*Fwd*/> = forward.as_ref();
+                    let forward: &GcArcFwd<T::AsArcFwd> = mem::transmute(/*&fwd_ref*/forward);
                     // Since fwd is still going on, it's safe to treat the forwarding pointer as a GcArcInner.
                     // We then clone it to avoid exposing GcArcInner directly to clients (but maybe
                     // we want to, in which case we'd hand it out with lifetime 'b).
@@ -1168,7 +1169,7 @@ pub struct TypedArenaHkt<T>(T);
     #[derive(Clone,Copy)]
     struct App<T>(T, T);
 
-    #[repr(C)]
+    /* #[repr(C)]
     #[derive(Clone,Copy)]
     union ExprData<T> {
         rel: u64,
@@ -1188,15 +1189,22 @@ pub struct TypedArenaHkt<T>(T);
     struct ExprVar<T> {
         tag: ExprTag,
         data: ExprData<T>,
+    } */
+    #[repr(C)]
+    #[derive(Clone,Copy)]
+    enum ExprVar<T> {
+        Rel(u64),
+        Abs(T),
+        App(App<T>),
     }
 
-    impl<T> Clone for ExprVar<T> where T: Copy {
+    /* impl<T> Clone for ExprVar<T> where T: Copy {
         fn clone(&self) -> Self {
             Self { tag: self.tag, data: self.data }
         }
     }
 
-    impl<T> Copy for ExprVar<T> where T: Copy {}
+    impl<T> Copy for ExprVar<T> where T: Copy {} */
 
     /// Just trying to keep representations the same.
     #[repr(C)]
@@ -1213,62 +1221,80 @@ pub struct TypedArenaHkt<T>(T);
     struct ExprArcFwd<'gc>(ExprVar<GcArcFwd<'gc, ExprArcFwd<'gc>>>);
     impl<'gc> Deref for ExprArcFwd<'gc> { type Target = ExprVar<GcArcFwd<'gc, ExprArcFwd<'gc>>>; fn deref(&self) -> &Self::Target { &self.0 } }
 
+    /* #[repr(C)]
+    struct ExprArcFwd<'gc>(ExprVar<GcArcFwd<'gc, ExprArc>>);
+    impl<'gc> Deref for ExprArcFwd<'gc> { type Target = ExprVar<GcArcFwd<'gc, ExprArc>>; fn deref(&self) -> &Self::Target { &self.0 } } */
+
     #[repr(C)]
     struct ExprArc(ExprVar<GcArc<ExprArc>>);
     impl<'gc, 'a> Deref for ExprArc { type Target = ExprVar<GcArc<ExprArc>>; fn deref(&self) -> &Self::Target { &self.0 } }
 
     impl<T> ExprVar<T> {
-        #[inline]
+        /* #[inline]
         fn Rel(rel: u64) -> Self {
-            ExprVar {
+            /*ExprVar {
                 tag: ExprTag::Rel,
                 data: ExprData { rel },
-            }
+            }*/
+            ExprVar::Rel(rel)
         }
 
         #[inline]
         fn Abs(abs: T) -> Self {
-            ExprVar {
+            /*ExprVar {
                 tag: ExprTag::Abs,
                 data: ExprData { abs },
-            }
+            }*/
+            ExprVar::Abs(abs)
         }
 
         #[inline]
         fn App(app: App<T>) -> Self {
-            ExprVar {
+            /*ExprVar {
                 tag: ExprTag::App,
                 data: ExprData { app },
-            }
-        }
+            }*/
+            ExprVar::App(app)
+        } */
 
         #[inline]
         fn match_own<R>(self, f_rel: impl FnOnce(u64) -> R,
                          f_abs: impl FnOnce(T) -> R,
                          f_app: impl FnOnce(App<T>) -> R) -> R {
-            unsafe {
+            /*unsafe {
                 match self.tag {
                     ExprTag::Rel => f_rel(self.data.rel),
                     ExprTag::Abs => f_abs(self.data.abs),
                     ExprTag::App => f_app(self.data.app),
                 }
+            }*/
+            match self {
+                ExprVar::Rel(rel) => f_rel(rel),
+                ExprVar::Abs(abs) => f_abs(abs),
+                ExprVar::App(app) => f_app(app),
             }
         }
 
+        #[inline]
         fn match_shr<R>(&self, f_rel: impl FnOnce(u64) -> R,
                          f_abs: impl FnOnce(&T) -> R,
                          f_app: impl FnOnce(&App<T>) -> R) -> R {
-            unsafe {
+            /* unsafe {
                 match self.tag {
                     ExprTag::Rel => f_rel(self.data.rel),
                     ExprTag::Abs => f_abs(&self.data.abs),
                     ExprTag::App => f_app(&self.data.app),
                 }
+            } */
+            match self {
+                ExprVar::Rel(rel) => f_rel(*rel),
+                ExprVar::Abs(abs) => f_abs(abs),
+                ExprVar::App(app) => f_app(app),
             }
         }
     }
 
-    impl Drop for ExprArc {
+    /* impl Drop for ExprArc {
         #[inline]
         fn drop(&mut self) {
             unsafe {
@@ -1279,7 +1305,7 @@ pub struct TypedArenaHkt<T>(T);
                 }
             }
         }
-    }
+    } */
 
     /* enum Expr<'gc, 'a> {
         Rel(u64),
@@ -1480,22 +1506,22 @@ pub fn gc_example() {
             ExprArcFwd(expr.0.match_shr(
                 |idx| ExprVar::Rel(idx),
                 |body| ExprVar::Abs(
-                    /*OwnFwd */{ /*old: */body.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
-                        let expr_new = GcArcFwd::new(trace_root(fwd, **body));
+                    /*OwnFwd */{ /*old: *//*unsafe { mem::transmute(*/body.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
+                        let expr_new = GcArcFwd::new(/*mem::transmute(*/trace_root(fwd, **body)/*)*/);
                         expr_ref.set_forwarding(&expr_new);
                         expr_new
-                    }) }),
+                    })/*) }*/ }),
                 |App(fun, arg)| ExprVar::App(App(
-                    /*OwnFwd */{ /*old: */fun.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
-                        let expr_new = GcArcFwd::new(trace_root(fwd, **fun));
+                    /*OwnFwd */{ /*old: *//*unsafe { mem::transmute(*/fun.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
+                        let expr_new = GcArcFwd::new(/*mem::transmute(*/trace_root(fwd, **fun)/*)*/);
                         expr_ref.set_forwarding(&expr_new);
                         expr_new
-                    }) },
-                    /*OwnFwd */{ /*old: */arg.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
-                        let expr_new = GcArcFwd::new(trace_root(fwd, **arg));
+                    })/*) }*/ },
+                    /*OwnFwd */{ /*old: *//*unsafe { mem::transmute(*/arg.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
+                        let expr_new = GcArcFwd::new(/*mem::transmute(*/trace_root(fwd, **arg)/*)*/);
                         expr_ref.set_forwarding(&expr_new);
                         expr_new
-                    }) })),
+                    })/*) }*/ })),
             ))
         }
 
