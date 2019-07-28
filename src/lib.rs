@@ -1066,7 +1066,7 @@ impl<'gc, 'a, T/*: ?Sized*/> Deref for Gc<'gc, 'a, T> where T: GcArcLayout {
     }
 }
 
-/// Note: safe because can go from T to T::AsArc!
+/// Note: Trivially safe.
 impl<'gc, 'a, T> From<&'a GcRefInner<'gc, T>> for Gc<'gc, 'a, T> where T: GcArcLayout {
     #[inline]
     fn from(new: &'a GcRefInner<'gc, T>) -> Self {
@@ -1080,15 +1080,15 @@ impl<'a, T> From<&'a GcArcInner<T::AsArc>> for Gc<'a, T> {
     fn from(old: Gc<'a, T::AsArc>) -> Self {
         Gc { old }
     }
-}
-
-/// Note: not safe because can't go from T::AsArc to T!
-impl<'a, T> From<&'a GcArc<T::AsArc>> for Gc<'a, T> {
-    #[inline]
-    fn from(old: GcArc<'a, T>) -> Self {
-        Gc { old: old.inner() }
-    }
 } */
+
+/// Safe because can go from T::AsArc to &T!
+impl<'gc, 'a, T> From<&'a GcArc<T::AsArc>> for Gc<'gc, 'a, T> where T : GcArcLayout {
+    #[inline]
+    fn from(old: &GcArc<T::AsArc>) -> Self {
+        unsafe { Gc { new: mem::transmute(old.inner()) } }
+    }
+}
 
 impl<'gc, 'a, T> Gc<'gc, 'a, T> where T: GcArcLayout {
     /// Note: this should only be run during collection, but with the current design it doesn't matter.
@@ -1146,12 +1146,12 @@ impl<'gc, T> GcRefInner<'gc, T> where T: GcArcLayout {
     }
 }
 
-impl<'gc, 'a, T> Gc<'gc, 'a, T> where T: GcArcLayout {
+/* impl<'gc, 'a, T> Gc<'gc, 'a, T> where T: GcArcLayout {
     #[inline]
     fn from(new: &'a GcRefInner<'gc, T>) -> Self {
         Gc { new }
     }
-}
+} */
 
 pub struct TypedArenaHkt<T>(T);
 
@@ -1445,6 +1445,49 @@ pub fn gc_example() {
             ExprArc::App(App(fun, arg)) => format!("({:?} {:?})", expr_arc_to_string(fun), expr_arc_to_string(arg)),
         }
     } */
+    fn trace_root<'a, 'gc>(fwd: &GcFwd<'gc>, expr: /*&*/Expr<'gc, 'a>) -> ExprArcFwd<'gc> {
+        /* match expr {
+            Expr::Rel(idx) => ExprArcFwd::Rel(idx),
+            Expr::Abs(body) => ExprArcFwd::Abs(
+                /*OwnFwd */{ /*old: */body.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
+                    let expr_new = GcArcFwd::new(trace_root(fwd, *body));
+                    expr_ref.set_forwarding(&expr_new);
+                    expr_new
+                }) }),
+            Expr::App(App(fun, arg)) => ExprArcFwd::App(App(
+                /*OwnFwd */{ /*old: */fun.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
+                    let expr_new = GcArcFwd::new(trace_root(fwd, *fun));
+                    expr_ref.set_forwarding(&expr_new);
+                    expr_new
+                }) },
+                /*OwnFwd */{ /*old: */arg.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
+                    let expr_new = GcArcFwd::new(trace_root(fwd, *arg));
+                    expr_ref.set_forwarding(&expr_new);
+                    expr_new
+                }) })),
+        } */
+        ExprArcFwd(expr.0.match_shr(
+            |idx| ExprVar::Rel(idx),
+            |body| ExprVar::Abs(
+                /*OwnFwd */{ /*old: *//*unsafe { mem::transmute(*/body.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
+                    let expr_new = GcArcFwd::new(/*mem::transmute(*/trace_root(fwd, **body)/*)*/);
+                    expr_ref.set_forwarding(&expr_new);
+                    expr_new
+                })/*) }*/ }),
+            |App(fun, arg)| ExprVar::App(App(
+                /*OwnFwd */{ /*old: *//*unsafe { mem::transmute(*/fun.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
+                    let expr_new = GcArcFwd::new(/*mem::transmute(*/trace_root(fwd, **fun)/*)*/);
+                    expr_ref.set_forwarding(&expr_new);
+                    expr_new
+                })/*) }*/ },
+                /*OwnFwd */{ /*old: *//*unsafe { mem::transmute(*/arg.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
+                    let expr_new = GcArcFwd::new(/*mem::transmute(*/trace_root(fwd, **arg)/*)*/);
+                    expr_ref.set_forwarding(&expr_new);
+                    expr_new
+                })/*) }*/ })),
+        ))
+    }
+
 
     let root = GcFwd::new/*::<ExprHkt, _, _>*/(/*|_| (TypedArena::default()), */move |/*my_arena, */fwd| {
         let my_arena: TypedArena::<GcRefInner<Expr>> = TypedArena::default()/*with_capacity(1000)*/;
@@ -1453,7 +1496,7 @@ pub fn gc_example() {
         let mut new_stack = Vec::<ExprRef>::new();
         let var = (&*my_arena.alloc(GcRefInner::new(Expr(ExprVar::Rel(0))))).into();
         let id = (&*my_arena.alloc(GcRefInner::new(Expr(ExprVar::Abs(var))))).into();
-        let r2 = Gc::from(my_arena.alloc(GcRefInner::new(Expr(ExprVar::Rel(1)))));
+        let r2 = Gc::from(&*my_arena.alloc(GcRefInner::new(Expr(ExprVar::Rel(1)))));
 
         let v = ExprVar::App(App(id, id));
 
@@ -1481,49 +1524,6 @@ pub fn gc_example() {
                 expr_new
             })
         } */
-
-        fn trace_root<'a, 'gc>(fwd: &GcFwd<'gc>, expr: /*&*/Expr<'gc, 'a>) -> ExprArcFwd<'gc> {
-            /* match expr {
-                Expr::Rel(idx) => ExprArcFwd::Rel(idx),
-                Expr::Abs(body) => ExprArcFwd::Abs(
-                    /*OwnFwd */{ /*old: */body.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
-                        let expr_new = GcArcFwd::new(trace_root(fwd, *body));
-                        expr_ref.set_forwarding(&expr_new);
-                        expr_new
-                    }) }),
-                Expr::App(App(fun, arg)) => ExprArcFwd::App(App(
-                    /*OwnFwd */{ /*old: */fun.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
-                        let expr_new = GcArcFwd::new(trace_root(fwd, *fun));
-                        expr_ref.set_forwarding(&expr_new);
-                        expr_new
-                    }) },
-                    /*OwnFwd */{ /*old: */arg.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
-                        let expr_new = GcArcFwd::new(trace_root(fwd, *arg));
-                        expr_ref.set_forwarding(&expr_new);
-                        expr_new
-                    }) })),
-            } */
-            ExprArcFwd(expr.0.match_shr(
-                |idx| ExprVar::Rel(idx),
-                |body| ExprVar::Abs(
-                    /*OwnFwd */{ /*old: *//*unsafe { mem::transmute(*/body.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
-                        let expr_new = GcArcFwd::new(/*mem::transmute(*/trace_root(fwd, **body)/*)*/);
-                        expr_ref.set_forwarding(&expr_new);
-                        expr_new
-                    })/*) }*/ }),
-                |App(fun, arg)| ExprVar::App(App(
-                    /*OwnFwd */{ /*old: *//*unsafe { mem::transmute(*/fun.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
-                        let expr_new = GcArcFwd::new(/*mem::transmute(*/trace_root(fwd, **fun)/*)*/);
-                        expr_ref.set_forwarding(&expr_new);
-                        expr_new
-                    })/*) }*/ },
-                    /*OwnFwd */{ /*old: *//*unsafe { mem::transmute(*/arg.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
-                        let expr_new = GcArcFwd::new(/*mem::transmute(*/trace_root(fwd, **arg)/*)*/);
-                        expr_ref.set_forwarding(&expr_new);
-                        expr_new
-                    })/*) }*/ })),
-            ))
-        }
 
         /* let root = match Gc::from(id).try_as_arc(&fwd) {
             Ok(old_id) => old_id,
@@ -1564,6 +1564,36 @@ pub fn gc_example() {
 
         /* unsafe { mem::transmute(root) } */
         // ExprArc::Rel(0)
+    });
+    println!("Passed root out of GC context: {:?}", /*expr_arc_to_string*/expr_to_string(&root));
+
+    let root2 = GcFwd::new(move |fwd| {
+        // let root = GcArc::new(root);
+        let root = &root;
+        // NOTE: This has one extra increment compared to the "preemptively initialize GcArc<T>"
+        // version when the GcArc is actually used, because we can't use the GcArc "in place."
+        // This is because we don't know for sure whether it will actually be allocated in the
+        // arena yet, so we need something to keep it alive--and then during the arena sweep it
+        // increments again.  To make this work nicely seems tricky (surely you need *some* way
+        // to differentiate between the two cases, and would any of those ways be lower overhead
+        // than a count?), so maybe we just accept this limitation for now.
+        let my_arena: TypedArena::<GcRefInner<Expr>> = TypedArena::default()/*with_capacity(1000)*/;
+        let root = GcRefInner::new(Expr(match root.0 {
+            ExprVar::Rel(rel) => ExprVar::Rel(rel),
+            ExprVar::Abs(ref abs) => ExprVar::Abs(Gc::from(abs)),
+            ExprVar::App(App(ref fun, ref arg)) => ExprVar::App(App(Gc::from(fun), Gc::from(arg))),
+        }));
+
+        let root = Gc::from(&*my_arena.alloc(root)); // GcRefInner::new(Gc::from(&**root)))); */
+        // let root = Gc::from(root);
+        // let r2 = ExprVar::Rel(1);
+        let v = /*Gc::from(&*my_arena.alloc(GcRefInner::new(Expr(*/ExprVar::App(App(root, root))/*))))*/;
+
+        println!("{:?}", expr_to_string(/*&fwd, */&v));
+
+        let root = trace_root(&fwd, /*&*/Expr(v/*r2*/));
+        let end = fwd.end();
+        GcArcFwd::new(root).into_gc_arc(end)
     });
     // GcFwd::new::</*TypedArenaHkt<GcRefInnerHkt<*/ExprHkt/*>>*/, _, _, _>(/*|_: &_| TypedArena::default()*/initialize, nt);
     // constrain2(nt);
@@ -1668,7 +1698,7 @@ pub fn gc_example() {
 
        the forwarding pointer.
        we should freeze the stack (which will prevent roots from being dropped). */
-    println!("Passed root out of GC context: {:?}", /*expr_arc_to_string*/expr_to_string(&root));
+    println!("Passed root out of GC context: {:?}", /*expr_arc_to_string*/expr_to_string(&root2));
 }
 
 #[cfg(test)]
