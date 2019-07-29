@@ -102,7 +102,6 @@ pub struct Gc<'gc, 'a, T> where T: GcArcLayout {
     new: &'a GcRefInner<'gc, T>,
 }
 
-
 impl<'gc, T> GcArcFwd<'gc, T> {
     /// Creating a new GcArcFwd requires only a T.  It is exactly like a GcArc<T>, but won't allow
     /// drops (or reading the data, for the time being at least) until GcDead<'a> is available.

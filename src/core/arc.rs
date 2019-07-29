@@ -51,6 +51,14 @@ pub struct GcArc<T/*: ?Sized*/> {
     phantom: PhantomData<T>,
 }
 
+unsafe impl<T: /*?Sized + */Sync + Send> Send for GcArc<T> {}
+unsafe impl<T: /*?Sized + */Sync + Send> Sync for GcArc<T> {}
+
+/* impl<T: ?Sized + Unsize<U>, U: ?Sized> CoerceUnsized<Arc<U>> for Arc<T> {}
+
+impl<T: ?Sized + Unsize<U>, U: ?Sized> DispatchFromDyn<Arc<U>> for Arc<T> {} */
+
+
 impl<T> GcArc<T> {
     #[inline]
     pub fn new(data: T) -> GcArc<T> {

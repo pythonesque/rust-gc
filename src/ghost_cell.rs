@@ -37,6 +37,9 @@ impl<'id> InvariantLifetime<'id> {
     }
 }
 
+unsafe impl<'id> Send for InvariantLifetime<'id> {}
+unsafe impl<'id> Sync for InvariantLifetime<'id> {}
+
 /// A ghost set.
 ///
 /// Once created, a Set can neither be cloned nor copied.
