@@ -101,7 +101,8 @@ pub struct GcFwd<'gc> {
     _marker: InvariantLifetime<'gc>,
 }
 
-/// 
+/// There is at most one of these for any lifetime 'gc, and it signals that any tracing for an
+/// epoch with brand 'gc is dead.
 #[derive(Clone,Copy)]
 pub struct GcDead<'gc> {
     _marker: InvariantLifetime<'gc>,

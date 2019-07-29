@@ -6,7 +6,7 @@ use core::ops::{Deref};
 use core::ptr::{NonNull};
 use core::convert::From;
 
-use crate::gc_core::{GcArc, GcArcLayout, GcArcFwdLayout, GcDead, GcFwd};
+use crate::gc_core::{GcArc, GcArcLayout, GcArcFwdLayout, GcDead, GcFreeze, GcFwd, GcPod};
 use crate::ghost_cell::{InvariantLifetime};
 
 /// Like a GcArc, but without Drop.
@@ -101,6 +101,20 @@ pub struct Gc<'gc, 'a, T> where T: GcArcLayout {
     /// pointer needs to be extra careful to never be dereferenced unless GcFwd is alive.
     new: &'a GcRefInner<'gc, T>,
 }
+
+/// Because GcArcFwd gives no access to T, only to the refcount, Pod is automatically
+/// implemented for all T.
+unsafe impl<'gc, T> GcPod for GcArcFwd<'gc, T> { }
+unsafe impl<'gc, T> GcFreeze for GcArcFwd<'gc, T> { }
+
+/// Safe because while there is interior mutability here, it can't be abused to create cycles
+/// unless T can already be abused in that way.  In particular as long as this type is alive we
+/// never hand out acess to shared references for anything inside it except for &T and
+/// (owned) references of GcArcFwd<'gc, T::AsArcFwd>.   The latter is *always* immune to this
+/// problem since it doesn't even provide access to T.
+// unsafe impl<'gc, T: GcPod> GcFreeze for GcRefInner<'gc, T> where T: GcArcLayout { }
+// unsafe impl<'gc, T: GcFreeze> GcPod for GcRefInner<'gc, T> where T: GcArcLayout { }
+unsafe impl<'gc, T: GcFreeze> GcPod for GcRefInner<'gc, T> where T: GcArcLayout { }
 
 impl<'gc, T> GcArcFwd<'gc, T> {
     /// Creating a new GcArcFwd requires only a T.  It is exactly like a GcArc<T>, but won't allow
@@ -225,6 +239,9 @@ impl<'gc, 'a, T> Gc<'gc, 'a, T> where T: GcArcLayout {
     /// Note: this should only be run during collection, but with the current design it doesn't matter.
     ///
     /// fwd is needed for correctness since we can read from the forwarding pointer.
+    ///
+    /// Also note that we can assume that if there are any young->old pointers, tracing will never hit a cycle,
+    /// thanks to the bounds on creating a Gc pointer from an Arc reference.
     #[inline]
     pub fn try_as_arc<'b>(self, _fwd: &'b GcFwd<'gc>) -> Result</*&'a GcArcInner<T::AsArcFwd>*/GcArcFwd<'gc, T::AsArcFwd>, &'a GcRefInner<'gc, T>> {
         unsafe {
@@ -429,22 +446,28 @@ impl<'gc, 'a, T> Copy for Gc<'gc, 'a, T> where T: GcArcLayout {
 
 
 /// Safe because can go from &T::AsArc to &T, as long as (1) we can differentiate a
-/// GcArcInner from a GcRefInner, and (2) the reference outlives 'a + 'gc!
+/// GcArcInner from a GcRefInner, (2) the reference outlives 'a + 'gc, (3) values of type T are
+/// deeply immutable (so we can't create an old-young cycle by accident by interpreting a
+/// GcArc<T::AsArc> as a Gc<T>).
+///
 /// Since it lives for at least 'a, (2) is satisfied; (1) is guaranteed by the fact that
 /// GcArcInner and GcRefInner have compatible representations (upheld by the two modules
 /// in this crate, but should probably make nicer with repr(transparent) or something).
 ///
 /// We used to have a union for the two kinds of references, but got rid of it in hopes of fixing a
-/// Miri bug.  Since the bug turned out to be unrelated to the union we might add it back at some
+/// Miri bug.  Since the bug turned out to be unrelated to the union we might add it back at some.
 /// point, maybe.
-impl<'gc, 'a, T> From<&'a GcArc<T::AsArc>> for Gc<'gc, 'a, T> where T : GcArcLayout {
+impl<'gc, 'a, T> From<&'a GcArc<T::AsArc>> for Gc<'gc, 'a, T> where
+        T : GcArcLayout,
+        T : GcFreeze,
+{
     #[inline]
     fn from(old: &'a GcArc<T::AsArc>) -> Self {
         unsafe { Gc { new: /*mem::transmute(old)*/ *(old as *const _ as *const &'a GcRefInner<T>) } }
     }
 }
 
-/// Note: Trivially safe.
+/// Note: Trivially safe.  Note that young generation cycles are okay.
 impl<'gc, 'a, T> From<&'a GcRefInner<'gc, T>> for Gc<'gc, 'a, T> where T: GcArcLayout {
     #[inline]
     fn from(new: &'a GcRefInner<'gc, T>) -> Self {

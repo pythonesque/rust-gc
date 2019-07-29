@@ -5,5 +5,5 @@
 
 pub use arc::{GcArc};
 pub use gc::{GcFwd, GcDead};
-pub use layout::{GcArcLayout, GcArcFwdLayout};
+pub use layout::{GcArcLayout, GcArcFwdLayout, GcFreeze, GcPod};
 pub use r#ref::{GcArcFwd, GcRefInner, Gc};

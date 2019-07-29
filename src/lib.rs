@@ -1,18 +1,21 @@
-#![feature(untagged_unions)]
 #![feature(alloc_layout_extra)]
 #![feature(allocator_api)]
 #![feature(box_into_raw_non_null)]
 #![feature(box_syntax)]
+#![feature(cfg_target_has_atomic)]
 #![feature(coerce_unsized)]
 #![feature(core_intrinsics)]
 #![feature(dispatch_from_dyn)]
 #![feature(dropck_eyepatch)]
+#![feature(integer_atomics)]
+#![feature(optin_builtin_traits)]
 // #![feature(placement_in_syntax)]
 #![feature(raw_vec_internals)]
 #![feature(receiver_trait)]
 #![feature(rustc_private)]
 #![feature(specialization)]
 #![feature(unsize)]
+#![feature(untagged_unions)]
 
 extern crate arena;
 // extern crate alloc;
@@ -31,12 +34,12 @@ use arena::TypedArena;
 use core::ops::{Deref};
 use core::convert::From;
 
+use std::cell::{Cell};
 
 pub use gc_core::{
-    GcArc,
-    GcFwd, GcDead,
-    GcArcLayout, GcArcFwdLayout,
-    GcArcFwd, GcRefInner, Gc,
+    Gc,
+    GcArc, GcArcFwd, GcArcFwdLayout, GcArcLayout,
+    GcDead, GcFreeze, GcFwd, GcPod, GcRefInner,
 };
 
 /* pub struct GcHkt<T>(T);
@@ -97,6 +100,9 @@ impl<'a, T> Hkt<'a> for GcRefInnerHkt<T>
         tag: ExprTag,
         data: ExprData<T>,
     } */
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug)]
+    struct Idx(Option</*&'static Idx*/&'static /*ExprArc*/str>);
     /// The Rust guide confirms that repr(C) on enums will have a nice uniform representation,
     /// so it is likely that we can rely on the standard Rust representation in most cases.  In any
     /// case pointer tagging will often be desirable to support interesting representations.  We
@@ -117,9 +123,9 @@ impl<'a, T> Hkt<'a> for GcRefInnerHkt<T>
     ///
     /// See https://github.com/rust-lang/rfcs/blob/master/text/2195-really-tagged-unions.md
     #[repr(C)]
-    #[derive(Clone,Copy)]
+    #[derive(Clone)]
     enum ExprVar<T> {
-        Rel(u64),
+        Rel(Cell<Idx>),
         Abs(T),
         App(App<T>),
     }
@@ -134,12 +140,12 @@ impl<'a, T> Hkt<'a> for GcRefInnerHkt<T>
 
     /// Just trying to keep representations the same.
     #[repr(C)]
-    #[derive(Clone,Copy)]
+    #[derive(Clone)]
     struct Expr<'gc, 'a>(ExprVar<Gc<'gc, 'a, Expr<'gc, 'a>>>);
     impl<'gc, 'a> Deref for Expr<'gc,'a> { type Target = ExprVar<Gc<'gc, 'a, Expr<'gc, 'a>>>; fn deref(&self) -> &Self::Target { &self.0 } }
 
     #[repr(C)]
-    #[derive(Clone,Copy)]
+    #[derive(Clone)]
     struct ExprRef<'gc, 'a>(ExprVar<&'a GcRefInner<'gc, ExprRef<'gc, 'a>>>);
     impl<'gc, 'a> Deref for ExprRef<'gc,'a> { type Target = ExprVar<&'a GcRefInner<'gc, ExprRef<'gc, 'a>>>; fn deref(&self) -> &Self::Target { &self.0 } }
 
@@ -184,7 +190,7 @@ impl<'a, T> Hkt<'a> for GcRefInnerHkt<T>
         } */
 
         #[inline]
-        fn match_own<R>(self, f_rel: impl FnOnce(u64) -> R,
+        fn match_own<R>(self, f_rel: impl FnOnce(Cell<Idx>) -> R,
                          f_abs: impl FnOnce(T) -> R,
                          f_app: impl FnOnce(App<T>) -> R) -> R {
             /*unsafe {
@@ -202,7 +208,7 @@ impl<'a, T> Hkt<'a> for GcRefInnerHkt<T>
         }
 
         #[inline]
-        fn match_shr<R>(&self, f_rel: impl FnOnce(u64) -> R,
+        fn match_shr<R>(&self, f_rel: impl FnOnce(&Cell<Idx>) -> R,
                          f_abs: impl FnOnce(&T) -> R,
                          f_app: impl FnOnce(&App<T>) -> R) -> R {
             /* unsafe {
@@ -213,7 +219,7 @@ impl<'a, T> Hkt<'a> for GcRefInnerHkt<T>
                 }
             } */
             match self {
-                ExprVar::Rel(rel) => f_rel(*rel),
+                ExprVar::Rel(rel) => f_rel(rel),
                 ExprVar::Abs(abs) => f_abs(abs),
                 ExprVar::App(app) => f_app(app),
             }
@@ -284,6 +290,71 @@ impl<'a, T> Hkt<'a> for GcRefInnerHkt<T>
         type FromArcFwd = ExprArc;
     }
 
+    fn expr_to_string<T>(/*fwd: &GcFwd<'gc>, */expr: /*&*//*Expr<'gc, 'a>*/&ExprVar<T>) -> String
+        where T: Deref, T::Target: Deref<Target=ExprVar<T>>, /*T::Target: AsRef<ExprVar<T>>*//*: Borrow<<Target=ExprVar<T>>*/
+    {
+        /*match expr {
+            Expr::Rel(idx) => idx.to_string(),
+            Expr::Abs(body) => format!("(λ. {:?})", expr_to_string(fwd, *body)),
+            Expr::App(App(fun, arg)) => format!("({:?} {:?})", expr_to_string(fwd, *fun), expr_to_string(fwd, *arg)),
+        }*/
+        expr.match_shr(
+            |idx| format!("{:?}", idx.get()),
+            |body| format!("(λ. {})", expr_to_string(&**body)),
+            |App(fun, arg)| format!("({} {})", expr_to_string(&*fun), expr_to_string(&**arg))
+        )
+    }
+
+    /* fn expr_arc_to_string(expr: /*&*/&ExprArc) -> String {
+        match expr {
+            ExprArc::Rel(idx) => idx.to_string(),
+            ExprArc::Abs(body) => format!("(λ. {:?})", expr_arc_to_string(body)),
+            ExprArc::App(App(fun, arg)) => format!("({:?} {:?})", expr_arc_to_string(fun), expr_arc_to_string(arg)),
+        }
+    } */
+    fn trace_root<'a, 'gc>(fwd: &GcFwd<'gc>, expr: &Expr<'gc, 'a>) -> ExprArcFwd<'gc> {
+        /* match expr {
+            Expr::Rel(idx) => ExprArcFwd::Rel(idx),
+            Expr::Abs(body) => ExprArcFwd::Abs(
+                /*OwnFwd */{ /*old: */body.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
+                    let expr_new = GcArcFwd::new(trace_root(fwd, *body));
+                    expr_ref.set_forwarding(&expr_new);
+                    expr_new
+                }) }),
+            Expr::App(App(fun, arg)) => ExprArcFwd::App(App(
+                /*OwnFwd */{ /*old: */fun.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
+                    let expr_new = GcArcFwd::new(trace_root(fwd, *fun));
+                    expr_ref.set_forwarding(&expr_new);
+                    expr_new
+                }) },
+                /*OwnFwd */{ /*old: */arg.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
+                    let expr_new = GcArcFwd::new(trace_root(fwd, *arg));
+                    expr_ref.set_forwarding(&expr_new);
+                    expr_new
+                }) })),
+        } */
+        ExprArcFwd(expr.0.match_shr(
+            |idx| ExprVar::Rel(idx.clone()),
+            |body| ExprVar::Abs(
+                /*OwnFwd */{ /*old: *//*unsafe { mem::transmute(*/body.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
+                    let expr_new = GcArcFwd::new(/*mem::transmute(*/trace_root(fwd, &*body)/*)*/);
+                    expr_ref.set_forwarding(&expr_new);
+                    expr_new
+                })/*) }*/ }),
+            |App(fun, arg)| ExprVar::App(App(
+                /*OwnFwd */{ /*old: *//*unsafe { mem::transmute(*/fun.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
+                    let expr_new = GcArcFwd::new(/*mem::transmute(*/trace_root(fwd, &*fun)/*)*/);
+                    expr_ref.set_forwarding(&expr_new);
+                    expr_new
+                })/*) }*/ },
+                /*OwnFwd */{ /*old: *//*unsafe { mem::transmute(*/arg.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
+                    let expr_new = GcArcFwd::new(/*mem::transmute(*/trace_root(fwd, &*arg)/*)*/);
+                    expr_ref.set_forwarding(&expr_new);
+                    expr_new
+                })/*) }*/ })),
+        ))
+    }
+
 pub fn gc_example() {
     /* struct ExprHkt;
 
@@ -345,71 +416,6 @@ pub fn gc_example() {
     {
         GcFwd::new::</*TypedArenaHkt<GcRefInnerHkt<ExprHkt>>*/ExprHkt2, _, _, ()>(/*|_: &_| TypedArena::default()*/(initialize as (for<'a> fn(&GcFwd<'a>) -> <ExprHkt2 as Hkt<'a>>::HktOut)), /*f*/(run as (for<'a> fn(&'a mut <ExprHkt2 as Hkt<'a>>::HktOut, GcFwd<'a>))))
     } */ */
-    fn expr_to_string<T>(/*fwd: &GcFwd<'gc>, */expr: /*&*//*Expr<'gc, 'a>*/&ExprVar<T>) -> String
-        where T: Deref, T::Target: Deref<Target=ExprVar<T>>, /*T::Target: AsRef<ExprVar<T>>*//*: Borrow<<Target=ExprVar<T>>*/
-    {
-        /*match expr {
-            Expr::Rel(idx) => idx.to_string(),
-            Expr::Abs(body) => format!("(λ. {:?})", expr_to_string(fwd, *body)),
-            Expr::App(App(fun, arg)) => format!("({:?} {:?})", expr_to_string(fwd, *fun), expr_to_string(fwd, *arg)),
-        }*/
-        expr.match_shr(
-            |idx| idx.to_string(),
-            |body| format!("(λ. {})", expr_to_string(&**body)),
-            |App(fun, arg)| format!("({} {})", expr_to_string(&*fun), expr_to_string(&**arg))
-        )
-    }
-
-    /* fn expr_arc_to_string(expr: /*&*/&ExprArc) -> String {
-        match expr {
-            ExprArc::Rel(idx) => idx.to_string(),
-            ExprArc::Abs(body) => format!("(λ. {:?})", expr_arc_to_string(body)),
-            ExprArc::App(App(fun, arg)) => format!("({:?} {:?})", expr_arc_to_string(fun), expr_arc_to_string(arg)),
-        }
-    } */
-    fn trace_root<'a, 'gc>(fwd: &GcFwd<'gc>, expr: /*&*/Expr<'gc, 'a>) -> ExprArcFwd<'gc> {
-        /* match expr {
-            Expr::Rel(idx) => ExprArcFwd::Rel(idx),
-            Expr::Abs(body) => ExprArcFwd::Abs(
-                /*OwnFwd */{ /*old: */body.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
-                    let expr_new = GcArcFwd::new(trace_root(fwd, *body));
-                    expr_ref.set_forwarding(&expr_new);
-                    expr_new
-                }) }),
-            Expr::App(App(fun, arg)) => ExprArcFwd::App(App(
-                /*OwnFwd */{ /*old: */fun.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
-                    let expr_new = GcArcFwd::new(trace_root(fwd, *fun));
-                    expr_ref.set_forwarding(&expr_new);
-                    expr_new
-                }) },
-                /*OwnFwd */{ /*old: */arg.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
-                    let expr_new = GcArcFwd::new(trace_root(fwd, *arg));
-                    expr_ref.set_forwarding(&expr_new);
-                    expr_new
-                }) })),
-        } */
-        ExprArcFwd(expr.0.match_shr(
-            |idx| ExprVar::Rel(idx),
-            |body| ExprVar::Abs(
-                /*OwnFwd */{ /*old: *//*unsafe { mem::transmute(*/body.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
-                    let expr_new = GcArcFwd::new(/*mem::transmute(*/trace_root(fwd, **body)/*)*/);
-                    expr_ref.set_forwarding(&expr_new);
-                    expr_new
-                })/*) }*/ }),
-            |App(fun, arg)| ExprVar::App(App(
-                /*OwnFwd */{ /*old: *//*unsafe { mem::transmute(*/fun.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
-                    let expr_new = GcArcFwd::new(/*mem::transmute(*/trace_root(fwd, **fun)/*)*/);
-                    expr_ref.set_forwarding(&expr_new);
-                    expr_new
-                })/*) }*/ },
-                /*OwnFwd */{ /*old: *//*unsafe { mem::transmute(*/arg.try_as_arc(&fwd).unwrap_or_else(|expr_ref| {
-                    let expr_new = GcArcFwd::new(/*mem::transmute(*/trace_root(fwd, **arg)/*)*/);
-                    expr_ref.set_forwarding(&expr_new);
-                    expr_new
-                })/*) }*/ })),
-        ))
-    }
-
 
     // let mut old_stack = Vec::<ExprArc>::new();
     let root = GcFwd::new/*::<ExprHkt, _, _>*/(/*|_| (TypedArena::default()), */move |/*my_arena, */fwd| {
@@ -417,7 +423,7 @@ pub fn gc_example() {
 
         // Mutator part.
         // let mut new_stack = Vec::<ExprRef>::new();
-        let var = (&*my_arena.alloc(GcRefInner::new(Expr(ExprVar::Rel(0))))).into();
+        let var = (&*my_arena.alloc(GcRefInner::new(Expr(ExprVar::Rel(Cell::new(/*Some("foo")*/Idx(None))))))).into();
         let id = (&*my_arena.alloc(GcRefInner::new(Expr(ExprVar::Abs(var))))).into();
         // let r2 = Gc::from(&*my_arena.alloc(GcRefInner::new(Expr(ExprVar::Rel(1)))));
 
@@ -470,7 +476,7 @@ pub fn gc_example() {
                 } else { panic!(); }
             }
         }*/;
-        let root = trace_root(&fwd, /*&*/Expr(v));
+        let root = trace_root(&fwd, &Expr(v));
         let end = fwd.end();
         // root.into_gc_arc(end)
         /* if let ExprArcFwd::App(App(fun, arg)) = root {
@@ -508,9 +514,14 @@ pub fn gc_example() {
         // the arena.  Again though we would have extra bumps.  It seems really hard to avoid this
         // unless you can somehow prove to Rust that you *will* be tracing something in the
         // future--and if you can do that, you can just GcArc it from the getgo, right?
+        //
+        // NOTE: There is an approach where we decrement ahead of time, but even then we only save
+        // a single atomic decrement (replacing it with a comparison).  Not clear how beneficial
+        // that is to begin with, but it might be good in some cases.  Anyway it doesn't work with
+        // our current system.
         let my_arena: TypedArena::<GcRefInner<Expr>> = TypedArena::default()/*with_capacity(1000)*/;
-        let root = GcRefInner::new(Expr(match root.0 {
-            ExprVar::Rel(rel) => ExprVar::Rel(rel),
+        let root = GcRefInner::new(Expr(match &root.0 {
+            ExprVar::Rel(rel) => ExprVar::Rel(rel.clone()),
             ExprVar::Abs(ref abs) => ExprVar::Abs(Gc::from(abs)),
             ExprVar::App(App(ref fun, ref arg)) => ExprVar::App(App(Gc::from(fun), Gc::from(arg))),
         }));
@@ -522,7 +533,7 @@ pub fn gc_example() {
 
         println!("{}", expr_to_string(/*&fwd, */&v));
 
-        let root = trace_root(&fwd, /*&*/Expr(v/*r2*/));
+        let root = trace_root(&fwd, &Expr(v/*r2*/));
         let end = fwd.end();
         GcArcFwd::new(root).into_gc_arc(end)
     });
@@ -653,4 +664,10 @@ mod tests {
         assert_eq!(2 + 2, 4);
 
     }
+
+    /* #[bench]
+    fn large_garbage() {
+        for
+        let root = GcArena::new();
+    } */
 }

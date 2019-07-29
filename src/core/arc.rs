@@ -15,6 +15,8 @@ use core::{isize, usize};
 use core::convert::From;
 // use core::slice::from_raw_parts_mut;
 
+use crate::gc_core::layout::{GcFreeze, GcPod};
+
 use std::alloc::{Global, Alloc, Layout, /*box_free, *//*handle_alloc_error*/};
 use std::boxed::Box;
 // use std::rc::is_dangling;
@@ -621,3 +623,7 @@ impl<T/*: ?Sized*/> AsRef<T> for GcArc<T> {
 }
 
 impl<T/*: ?Sized*/> Unpin for GcArc<T> { }
+
+/// Safe because while there is interior mutability here, it can't be abused to create cycles
+/// unless T can already be abused in that way.
+unsafe impl<T: GcPod> GcPod for GcArc<T> { }
